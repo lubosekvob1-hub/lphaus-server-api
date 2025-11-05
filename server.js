@@ -1,11 +1,10 @@
-// server.js - API Server pro LPHaus (Verze s Místnostmi)
+// server.js - LPHaus API Server (Opravená verze s Místnostmi)
 const express = require('express');
 const { TuyaCloud } = require('./tuya.js');
 const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CONFIG_FILE = 'config.json';
 
 // ***************************************************************
 // * 1. ZDE MUSÍTE DEFINOVAT MÍSTNOSTI A DEVICE ID               *
@@ -16,19 +15,18 @@ let devices = {
         id: 'obývací_pokoj',
         název: 'Obývací Pokoj',
         zařízení: [
-            // Nahraďte ZÁSTUPNÉ ID skutečnými ID z Tuya IoT!
-            { jméno: 'Hlavní Světlo', deviceId: 'ZDE_ID_OBAVACI_SVETLO_TUYA', kód_funkce: 'switch_1' }, 
-            { jméno: 'TV Zásuvka', deviceId: 'ZDE_ID_OBYVACI_ZASUVKA_TUYA', kód_funkce: 'switch_1' }
+            // ZMĚŇTE TOTO: Vložte svá skutečná Device ID sem!
+            { jméno: 'Hlavní Světlo', deviceId: 'VAŠE_SKUTECNE_ID_SVETLO_1', kód_funkce: 'switch_1' }, 
+            { jméno: 'TV Zásuvka', deviceId: 'VAŠE_SKUTECNE_ID_ZASUVKA_2', kód_funkce: 'switch_1' }
         ]
     },
     koupelna: {
         id: 'koupelna',
         název: 'Koupelna',
         zařízení: [
-            { jméno: 'Osvětlení', deviceId: 'ZDE_ID_KOUPELNA_OSVETLENI_TUYA', kód_funkce: 'switch_1' }
+            { jméno: 'Osvětlení', deviceId: 'VAŠE_SKUTECNE_ID_KOUPELNA_3', kód_funkce: 'switch_1' }
         ]
     }
-    // Zde můžete přidat další místnosti a zařízení
 };
 
 let tuya;
@@ -36,7 +34,8 @@ let tuya;
 app.use(express.json());
 
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    // Toto umožňuje přístup z Expo aplikace (CORS)
+    res.header('Access-Control-Allow-Origin', '*'); 
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     next();
 });
@@ -51,19 +50,14 @@ function initializeTuya() {
     });
 }
 
-// Při startu použijeme jako initialDeviceId první ID z celé struktury (jen pro inicializaci)
+// Získá první ID pro účely inicializace Tuya Cloud
 function getInitialDeviceId() {
     for (const room in devices) {
         if (devices[room].zařízení.length > 0) {
             return devices[room].zařízení[0].deviceId;
         }
     }
-    return ''; // Prázdné, pokud nejsou žádná zařízení
-}
-
-// Vzhledem ke komplexnosti to zjednodušíme. Načítání z config.json teď přeskočíme.
-function loadConfig() {
-    // Tuto funkci nyní zjednodušíme, ID jsou definována přímo v proměnné 'devices'.
+    return ''; 
 }
 
 
@@ -71,7 +65,7 @@ function loadConfig() {
 
 // A. Endpoint pro získání celé mapy zařízení (Místnosti)
 app.get('/api/devices', (req, res) => {
-    // Pošleme celou strukturu místností a zařízení aplikaci
+    // Aplikace zavolá tento endpoint, aby získala seznam místností
     res.json(devices);
 });
 
@@ -82,8 +76,8 @@ app.post('/api/device/toggle', async (req, res) => {
 
     if (!deviceId || deviceId.length < 10) {
         console.log('[LOG] CHYBA: Chybí Device ID pro ovládání. SIMULACE.');
-        // Vrátíme simulaci, pokud chybí ID, aby aplikace nehavarovala
-        return res.json({ success: true, data: 'OK (SIMULACE - chybí ID)' }); 
+        // Vrací 200 OK s upozorněním, aby aplikace fungovala i bez ID
+        return res.json({ success: true, message: 'OK (SIMULACE - chybí ID)' }); 
     }
 
     try {
@@ -106,20 +100,21 @@ app.post('/api/device/toggle', async (req, res) => {
 });
 
 
-// C. Ponecháme staré /api/config pro kompatibilitu, ale zjednodušíme ho
+// C. Endpoint pro získání prvního Device ID pro kompatibilitu
 app.get('/api/config', (req, res) => {
     res.json({ deviceId: getInitialDeviceId() });
 });
 
 
 // --- SPUŠTĚNÍ SERVERU ---
-loadConfig(); 
 initializeTuya(); 
 
 app.listen(PORT, () => {
     console.log(`[SERVER] LPHaus API Server běží na http://localhost:${PORT}`);
     const firstId = getInitialDeviceId();
-    if (firstId) {
+    if (firstId && firstId.includes('VAŠE_SKUTECNE_ID')) {
+        console.warn(`[SERVER] EXTRÉMNÍ UPOZORNĚNÍ: Používáte zástupná Device ID! Server nemusí fungovat.`);
+    } else if (firstId) {
         console.log(`[SERVER] Tuya Cloud inicializován s prvním Device ID: ${firstId}`);
     } else {
         console.warn(`[SERVER] UPOZORNĚNÍ: Žádná Device ID nenalezena. Server běží v SIMULAČNÍM režimu.`);
