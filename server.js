@@ -1,120 +1,122 @@
+// server.js - API Server pro LPHaus
 const express = require('express');
-const cors = require('cors');
-const { Cloud } = require('@tuyapi/cloud'); // Knihovna Cloud z @tuyapi
-const fs = require('fs'); // Knihovna pro práci se soubory
+const { TuyaCloud } = require('./tuya.js');
+const fs = require('fs');
 
 const app = express();
-const PORT = 3000;
-
-// 🚨 VLOŽ ZDE SVÉ SKUTEČNÉ KLÍČE 🚨
-const TUYA_CLIENT_ID = 'kruugnjh47qpwgjhevqqnj'; // <--- TVÉ Access ID
-const TUYA_SECRET = '6f6b0a0063644dee9976c9c0dbee896e';     // <--- TVŮJ Secret Key
-
-// NASTAVENÍ
-const TUYA_REGION = 'eu'; 
+const PORT = process.env.PORT || 3000;
 const CONFIG_FILE = 'config.json';
+let deviceId = '';
 
-let cloud = null;
-let deviceId = ''; 
-
-app.use(cors());
 app.use(express.json());
 
-// --- FUNKCE PRO NAČTENÍ DEVICE ID ZE SOUBORU config.json ---
+// Povolit CORS (Cross-Origin Resource Sharing) pro komunikaci s aplikací
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
+});
+
+let tuya;
+
+// --- FUNKCE PRO NASTAVENÍ A INICIALIZACI ---
+
+// 1. Inicializuje Tuya Cloud s aktuálním Device ID
+function initializeTuya() {
+    // Vytvoření instance klienta Tuya Cloud s klíči
+    tuya = new TuyaCloud({
+        accessId: process.env.TUYA_ACCESS_ID,
+        accessKey: process.env.TUYA_ACCESS_KEY,
+        // DŮLEŽITÉ: REGION musíte nastavit správně (eu, us, atd.)
+        region: process.env.TUYA_REGION || 'eu', 
+    });
+}
+
+// 2. Ukládá konfiguraci (Device ID) do souboru
+function saveConfig(newDeviceId) {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ deviceId: newDeviceId }));
+    deviceId = newDeviceId;
+}
+
+// 3. Načítá konfiguraci ze souboru nebo používá placeholder
 function loadConfig() {
     try {
-        const configData = fs.readFileSync(CONFIG_FILE, 'utf8');
-        const config = JSON.parse(configData);
-        deviceId = config.MAIN_LIGHT_DEVICE_ID;
+        const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        deviceId = config.deviceId;
     } catch (error) {
         console.error(`[SERVER] Chyba při čtení ${CONFIG_FILE}. Používám placeholder.`);
-        deviceId = 'ZATIM_NEMAM_ZASUVKU';
+        
+        // *******************************************************************
+        // * ZDE JE MÍSTO PRO VLOŽENÍ VAŠEHO SKUTEČNÉHO DEVICE ID Z TUYA *
+        // *******************************************************************
+        deviceId = 'ZDE_VLOZTE_TVOJE_SKUTECNE_DEVICE_ID_Z_TUYA'; // ZASTUPNÝ TEXT PRO SIMULACI/PRVNÍ SPUŠTĚNÍ
     }
 }
 
-// --- FUNKCE PRO ULOŽENÍ NOVÉHO DEVICE ID DO config.json ---
-function saveConfig(newDeviceId) {
-    const config = { MAIN_LIGHT_DEVICE_ID: newDeviceId };
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
-    deviceId = newDeviceId;
-    console.log(`[SERVER] Device ID uloženo a aktualizováno na: ${deviceId}`);
-}
 
-// --- INITIALIZACE TUYA CLOUDU ---
-function initializeTuya() {
-    if (deviceId && deviceId !== 'ZATIM_NEMAM_ZASUVKU') {
-        try {
-            // Inicializace proběhne POUZE, když máme platné ID
-            cloud = new Cloud({
-                accessId: TUYA_CLIENT_ID, // opravený název proměnné
-                secretKey: TUYA_SECRET,   // opravený název proměnné
-                region: TUYA_REGION,
-            });
-            console.log('✅ Tuya Cloud inicializován s tvými klíči.');
-        } catch (error) {
-            console.error('--- KRITICKÁ CHYBA PŘI INITIALIZACI TUYA CLOUDU: ZKONTROLUJ KLÍČE ---', error.message);
-            cloud = null; // V případě chyby necháme null
-        }
-    } else {
-        console.log('--- Tuya Cloud NENÍ inicializován (chybí Device ID). ---');
-        cloud = null;
-    }
-}
+// --- API ENDPOINTY ---
 
-// --- ENDPOINT PRO OVLÁDÁNÍ ZÁSUVKY ---
+// A. Endpoint pro zapnutí/vypnutí světla (HLAVNÍ FUNKCE)
 app.post('/api/light/toggle', async (req, res) => {
-    const { action } = req.body;
-    const value = action === 'on';
-
-    console.log(`[LPHaus API] PŘÍKAZ PŘIJAT: Akce: ${action}`);
-
-    if (cloud === null) {
-        console.warn('[SERVER] Nelze ovládat: Device ID není nastaveno nebo inicializace selhala. Spouštím simulaci.');
-        return res.json({ success: true, message: 'Simulace: ID nenastaveno, akce proběhla.' });
+    if (!deviceId || deviceId.length < 10) {
+        // SIMULACE: Pokud není platné Device ID, pouze simulujeme OK
+        console.log('[LOG] SIMULACE: Přepínání stavu zásuvky (chybí Device ID).');
+        return res.json({ success: true, data: 'OK' }); 
     }
 
     try {
-        // Použijeme deviceId načtené z configu
-        const result = await cloud.device.control(deviceId, {
-            commands: [{ code: 'switch_led', value: value }], // 'switch_led' je běžné ID pro vypínač
-        });
+        const status = await tuya.getDeviceStatus(deviceId);
+        const currentPower = status.find(item => item.code === 'switch_1').value;
+        const newPower = !currentPower;
 
-        console.log(`[TUYA] Akce '${action}' odeslána pro ID: ${deviceId}`);
-        res.json({ success: true, data: result });
+        const result = await tuya.setDeviceStatus(deviceId, [{
+            code: 'switch_1',
+            value: newPower,
+        }]);
+
+        if (result.success) {
+            console.log(`[LOG] TUYA: Příkaz k přepnutí na stav ${newPower} odeslán úspěšně.`);
+            return res.json({ success: true, data: result.success });
+        } else {
+            // Chyba v komunikaci s Tuya Cloud
+            console.error('[TUYA] Chyba: Komunikace s Tuya Cloud selhala.');
+            return res.status(500).json({ success: false, error: 'Chyba při komunikaci s Tuya Cloud.' });
+        }
     } catch (error) {
         console.error('[TUYA] Chyba při odesílání příkazu:', error.message);
-        res.status(500).json({ success: false, error: 'Chyba při komunikaci s Tuya Cloud.' });
+        return res.status(500).json({ success: false, error: 'Chyba při komunikaci s Tuya Cloud.' });
     }
 });
 
-// --- NOVÝ ENDPOINT PRO ZÍSKÁNÍ/NASTAVENÍ Device ID (Konfigurace) ---
 
-// 1. Získání aktuálního Device ID
+// B. Endpoint pro získání aktuálního Device ID (Konfigurace)
 app.get('/api/config', (req, res) => {
     res.json({ deviceId: deviceId });
 });
 
-// 2. Nastavení nového Device ID
+// C. Endpoint pro nastavení nového Device ID (Konfigurace)
 app.post('/api/config', (req, res) => {
     const { newDeviceId } = req.body;
-
     if (!newDeviceId || typeof newDeviceId !== 'string' || newDeviceId.length < 10) {
         return res.status(400).json({ success: false, error: 'Neplatné Device ID (příliš krátké).' });
     }
 
     saveConfig(newDeviceId); // Uloží ID do souboru a proměnné
-    initializeTuya(); // Zkusí znovu inicializovat Tuya Cloud s novým ID
-
+    initializeTuya(); // Znovu inicializuje Tuya Cloud s novým ID
+    
     res.json({ success: true, message: 'Device ID úspěšně nastaveno.', deviceId: deviceId });
 });
 
 
 // --- SPUŠTĚNÍ SERVERU ---
-loadConfig(); // Načte ID při startu
-initializeTuya(); // Zkusí inicializovat Tuya
+loadConfig(); // Načte Device ID při startu
+initializeTuya(); // Inicializuje Tuya s Device ID
 
 app.listen(PORT, () => {
-    console.log(`-----------------------------------------------------`);
-    console.log(`✅ LPHaus API Server běží na http://localhost:${PORT}`);
-    console.log(`-----------------------------------------------------`);
+    console.log(`[SERVER] LPHaus API Server běží na http://localhost:${PORT}`);
+    if (deviceId && deviceId.length > 10) {
+        console.log(`[SERVER] Tuya Cloud inicializován s Device ID: ${deviceId}`);
+    } else {
+        console.warn(`[SERVER] UPOZORNĚNÍ: Používám placeholder. Je třeba nastavit skutečné Device ID.`);
+    }
 });
